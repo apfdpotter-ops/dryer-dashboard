@@ -48,6 +48,13 @@ def get_processed_data():
     return data
 
 
+# Backwards-compatible alias: some callers (or older code) may import
+# `get_data` from this module. Provide a simple alias to avoid ImportError.
+def get_data():
+    """Compatibility wrapper for get_processed_data()."""
+    return get_processed_data()
+
+
 if __name__ == "__main__":
     # Simple test
     print("Testing processed logic… Press Ctrl+C to stop.")

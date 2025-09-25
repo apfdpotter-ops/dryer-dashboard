@@ -1,0 +1,7 @@
+nohup: ignoring input
+INFO:     Will watch for changes in these directories: ['/home/steve/dryer-dashboard/.git/dryer-dashboard-1']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [7854] using WatchFiles
+INFO:     Started server process [7861]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
