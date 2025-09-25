@@ -1,0 +1,4 @@
+fastapi
+uvicorn
+adafruit-circuitpython-max31855
+adafruit-circuitpython-ads1x15
