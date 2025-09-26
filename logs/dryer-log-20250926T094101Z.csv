@@ -1,0 +1,2 @@
+timestamp,inlet_c,outlet_c,inlet_v,outlet_v,simulated,errors,auger_pct,bushels_per_hr
+2025-09-26T09:41:01.123920Z,,,0.949375,0.3765,False,[],,71.23106060606061

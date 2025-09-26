@@ -13,6 +13,11 @@ from pathlib import Path
 from datetime import datetime
 
 from . import sensors as sensors_module
+from .logger import create_logger
+
+# instantiate a CSV logger (logs directory inside project static area)
+LOG_DIR = str(project_root := Path(__file__).resolve().parent.parent / 'logs') if 'project_root' not in globals() else str(project_root / 'logs')
+logger = create_logger(LOG_DIR, interval_seconds=int(os.environ.get('LOG_INTERVAL', 900)))
 
 # Simple in-memory auger state. This is deliberately minimal: it keeps the
 # current discharge auger percentage (0..100). For persistence across reboots
@@ -28,6 +33,11 @@ def create_app():
     project_root = Path(__file__).resolve().parent.parent
     static_dir = str(project_root / 'static')
     app = Flask(__name__, static_folder=static_dir, static_url_path="/")
+
+    # Create logger instance after project_root is known
+    log_dir = str(project_root / 'logs')
+    from .logger import create_logger
+    _logger = create_logger(log_dir, interval_seconds=int(os.environ.get('LOG_INTERVAL', 900)))
 
     @app.route("/api/sensors")
     def api_sensors():
@@ -191,6 +201,333 @@ def create_app():
 
         # GET
         return jsonify({'auger_pct': cur})
+
+    # Logging control endpoints
+    @app.route('/logs/start', methods=['POST'])
+    def logs_start():
+        try:
+            _logger.start()
+            return jsonify({'running': True, 'file': _logger.current_file()})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/logs/stop', methods=['POST'])
+    def logs_stop():
+        try:
+            _logger.stop()
+            return jsonify({'running': False})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/logs/status')
+    def logs_status():
+        return jsonify({'running': _logger.is_running(), 'file': _logger.current_file()})
+
+    @app.route('/logs/list')
+    def logs_list():
+        return jsonify({'logs': _logger.list_logs()})
+
+    @app.route('/logs/sample', methods=['POST'])
+    def logs_sample():
+        """Trigger a one-off sample and append to the current log file. If no log exists,
+        a new file will be created. Returns the file name written to or an error."""
+        try:
+            name = _logger.sample_once()
+            if name is None:
+                return jsonify({'error': 'failed to write sample'}), 500
+            return jsonify({'file': name})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/logs/latest')
+    def logs_latest():
+        """Return the most recent data row from the newest log file as plain text."""
+        try:
+            row = _logger.get_latest_row()
+            if row is None:
+                return jsonify({'row': None})
+            return jsonify({'row': row})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+
+    @app.route('/logs/preview')
+    def logs_preview():
+        """Return the last N parsed rows from the newest log file as JSON.
+
+        Query params:
+          - limit (int) default 10
+        """
+        from flask import request
+        from zoneinfo import ZoneInfo
+        UTC = ZoneInfo('UTC')
+        LOCAL = ZoneInfo('America/Chicago')
+        try:
+            limit = int(request.args.get('limit', 10))
+        except Exception:
+            limit = 10
+
+        files = _logger.list_logs()
+        if not files:
+            return jsonify({'rows': []})
+
+        newest = Path(log_dir) / files[0]
+
+        import csv, ast
+        from datetime import datetime
+
+        try:
+            with newest.open('r', newline='') as f:
+                reader = csv.reader(f)
+                all_rows = list(reader)
+        except Exception:
+            return jsonify({'rows': []})
+
+        if not all_rows or len(all_rows) < 2:
+            return jsonify({'rows': []})
+
+        header = all_rows[0]
+        header_map = {
+            'timestamp': 'Timestamp',
+            'inlet_c': 'Temp In',
+            'outlet_c': 'Temp Out',
+            'inlet_v': 'Moisture In',
+            'outlet_v': 'Moisture Out',
+            'simulated': 'Simulated',
+            'errors': 'Errors',
+            'auger_pct': 'Discharge Percentage',
+            'bushels_per_hr': 'Bushels-per-hr',
+        }
+        friendly_keys = [header_map.get(h, h) for h in header]
+
+        def try_parse(value):
+            if value is None or value == '':
+                return None
+            try:
+                if '.' in value:
+                    return float(value)
+                return int(value)
+            except Exception:
+                pass
+            try:
+                s = value
+                # parse as UTC and convert to local time
+                if isinstance(s, str) and s.endswith('Z'):
+                    s2 = s[:-1]
+                    dt = datetime.fromisoformat(s2)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=UTC)
+                    local_dt = dt.astimezone(LOCAL)
+                    return local_dt.isoformat()
+                dt = datetime.fromisoformat(s)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=UTC)
+                local_dt = dt.astimezone(LOCAL)
+                return local_dt.isoformat()
+            except Exception:
+                return value
+
+        rows = []
+        data_rows = all_rows[1:]
+        for row in data_rows[-limit:]:
+            obj = {}
+            for i, val in enumerate(row):
+                key = friendly_keys[i] if i < len(friendly_keys) else f'col{i}'
+                if i < len(header) and header[i] == 'errors':
+                    pretty = None
+                    try:
+                        parsed_errors = ast.literal_eval(val) if val not in (None, '') else []
+                        if isinstance(parsed_errors, (list, tuple)):
+                            pretty = '; '.join(str(x) for x in parsed_errors) if parsed_errors else None
+                        else:
+                            pretty = str(parsed_errors) if parsed_errors is not None else None
+                    except Exception:
+                        pretty = val
+                    obj[key] = pretty
+                else:
+                    parsed = try_parse(val)
+                    # convert datetime to ISO string for JSON
+                    if hasattr(parsed, 'isoformat'):
+                        obj[key] = parsed.isoformat()
+                    else:
+                        obj[key] = parsed
+            rows.append(obj)
+
+        return jsonify({'rows': rows})
+
+    @app.route('/kiosk/exit', methods=['POST'])
+    def kiosk_exit():
+        """Attempt to stop the systemd kiosk service. Only callable from localhost."""
+        from flask import request
+        # simple origin check: only allow local calls
+        if request.remote_addr not in ('127.0.0.1', '::1'):
+            return jsonify({'error': 'forbidden'}), 403
+
+        import subprocess
+        try:
+            subprocess.check_call(['systemctl', '--user', 'stop', 'dryer-kiosk.service'])
+            return jsonify({'stopped': True})
+        except subprocess.CalledProcessError:
+            # try system service
+            try:
+                subprocess.check_call(['sudo', 'systemctl', 'stop', 'dryer-kiosk.service'])
+                return jsonify({'stopped': True})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
+
+    @app.route('/logs/download/<path:name>')
+    def logs_download(name):
+        from flask import send_from_directory
+        try:
+            return send_from_directory(log_dir, name, as_attachment=True)
+        except Exception:
+            return jsonify({'error': 'not found'}), 404
+
+
+    @app.route('/logs/export')
+    def logs_export():
+        """Export the newest CSV log as an XLSX file and return as attachment.
+
+        Requires `openpyxl` to be installed. If not present, returns 503 with
+        instructions for installing the dependency.
+        """
+        # find newest CSV
+        files = _logger.list_logs()
+        if not files:
+            return jsonify({'error': 'no logs available'}), 404
+
+        newest = Path(log_dir) / files[0]
+
+        try:
+            import openpyxl
+            from openpyxl import Workbook
+            from openpyxl.styles import Font
+        except Exception:
+            return jsonify({'error': 'openpyxl not installed; run `pip install openpyxl`'}), 503
+
+        # read CSV rows and produce typed XLSX for readability
+        wb = Workbook()
+        ws = wb.active
+
+        import csv
+        from datetime import datetime
+
+        rows = []
+        with newest.open('r', newline='') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                rows.append(row)
+
+        if not rows:
+            return jsonify({'error': 'empty log file'}), 404
+
+        # header styling
+        header = rows[0]
+        # map internal CSV header names to friendly column names requested by user
+        header_map = {
+            'timestamp': 'Timestamp',
+            'inlet_c': 'Temp In',
+            'outlet_c': 'Temp Out',
+            'inlet_v': 'Moisture In',
+            'outlet_v': 'Moisture Out',
+            'simulated': 'Simulated',
+            'errors': 'Errors',
+            'auger_pct': 'Discharge Percentage',
+            'bushels_per_hr': 'Bushels-per-hr',
+        }
+        friendly_header = [header_map.get(h, h) for h in header]
+        for ci, col in enumerate(friendly_header, start=1):
+            cell = ws.cell(row=1, column=ci, value=col)
+            cell.font = Font(bold=True)
+
+        # helper to try parse numeric or datetime
+        from zoneinfo import ZoneInfo
+        UTC = ZoneInfo('UTC')
+        LOCAL = ZoneInfo('America/Chicago')
+
+        def try_parse(value):
+            if value is None or value == '':
+                return None
+            # try int/float
+            try:
+                if '.' in value:
+                    return float(value)
+                return int(value)
+            except Exception:
+                pass
+            # try ISO datetime (strip trailing Z)
+            try:
+                s = value
+                # if the string ends with Z, treat as UTC
+                if isinstance(s, str) and s.endswith('Z'):
+                    s2 = s[:-1]
+                    dt = datetime.fromisoformat(s2)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=UTC)
+                    # convert to local tz and return naive local datetime for Excel
+                    local_dt = dt.astimezone(LOCAL)
+                    return local_dt.replace(tzinfo=None)
+
+                dt = datetime.fromisoformat(s)
+                # if no tzinfo, assume UTC then convert
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=UTC)
+                local_dt = dt.astimezone(LOCAL)
+                return local_dt.replace(tzinfo=None)
+            except Exception:
+                return value
+
+        # write data rows typed, with pretty-printing for errors column
+        col_widths = [len(c) for c in header]
+        # find index of 'errors' column in original CSV header
+        try:
+            errors_idx = header.index('errors')
+        except ValueError:
+            errors_idx = None
+
+        import ast
+        for ri, row in enumerate(rows[1:], start=2):
+            for ci, val in enumerate(row, start=1):
+                # pretty-print errors column if present
+                if errors_idx is not None and (ci - 1) == errors_idx:
+                    pretty = None
+                    try:
+                        parsed_errors = ast.literal_eval(val) if val not in (None, '') else []
+                        if isinstance(parsed_errors, (list, tuple)):
+                            pretty = '; '.join(str(x) for x in parsed_errors) if parsed_errors else None
+                        else:
+                            pretty = str(parsed_errors) if parsed_errors is not None else None
+                    except Exception:
+                        pretty = val
+                    ws.cell(row=ri, column=ci, value=pretty)
+                    text = str(pretty) if pretty is not None else ''
+                else:
+                    parsed = try_parse(val)
+                    cell = ws.cell(row=ri, column=ci, value=parsed)
+                    # if this is the timestamp column, apply a datetime format
+                    try:
+                        if header[ci-1] == 'timestamp' and isinstance(parsed, datetime):
+                            cell.number_format = 'yyyy-mm-dd hh:mm:ss'
+                    except Exception:
+                        pass
+                    text = str(parsed) if parsed is not None else ''
+
+                # track width
+                if ci-1 >= len(col_widths):
+                    col_widths.append(len(text))
+                else:
+                    col_widths[ci-1] = max(col_widths[ci-1], len(text))
+
+        # auto-size columns (simple heuristic)
+        for i, w in enumerate(col_widths, start=1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = min(max(w, 10), 50)
+
+        out_name = newest.stem + '.xlsx'
+        out_path = Path(log_dir) / out_name
+        wb.save(out_path)
+
+        from flask import send_from_directory
+        return send_from_directory(log_dir, out_name, as_attachment=True)
 
     @app.route("/")
     def index():

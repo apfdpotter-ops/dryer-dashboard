@@ -13,31 +13,66 @@
       margin: 0;
       padding: 20px;
     }
+    /* prefer color emoji fonts when available */
+    body, button, .label, .value { font-family: Arial, 'Noto Color Emoji', 'Noto Emoji', 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif; }
     h1 { margin-bottom: 10px; font-size: 2.2em; }
     .status-light { width: 20px; height: 20px; border-radius: 50%; display: inline-block; margin-left: 10px; vertical-align: middle; border: 2px solid #666; }
     .status { font-size: 1.3em; margin-bottom: 20px; }
-    .card { display: inline-block; background: #fff; border-radius: 12px; padding: 20px; margin: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.15); min-width: 200px; }
-    .emoji { font-size: 2em; display: block; margin-bottom: 5px; }
+  /* make cards a consistent box so layout looks tidy on the kiosk */
+  .card { display: inline-flex; background: #fff; border-radius: 12px; padding: 12px; margin: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.15); width: 220px; height: 160px; align-items: center; justify-content: center; flex-direction: column; }
+  .emoji { font-size: 1.8em; display: block; margin-bottom: 6px; line-height:1; }
+  /* Twemoji replaces glyphs with <img> elements; ensure those images are sized like the text emoji
+     so they don't overflow or shift layout. Keep them inline within the card and capped in height. */
+  img.emoji, img.twemoji {
+    width: 1.8em;
+    height: 1.8em;
+    display: block;
+    object-fit: contain;
+    margin-bottom: 6px;
+  }
+  /* Cards that don't have an emoji need slightly tighter vertical spacing */
+  .card.no-emoji { padding-top: 18px; }
     .value { font-size: 1.6em; font-weight: bold; }
     .label { font-size: 1em; color: #777; }
     .units-toggle { margin-left: 12px; padding:6px 10px; border-radius:6px; cursor:pointer }
     .small-button { background: #eee; border-radius: 6px; border: 1px solid #ccc; padding: 6px 10px; cursor: pointer; margin: 2px; font-weight: bold; }
+
+    /* Simple page container styles for single-page navigation */
+    .page { display: block; }
+    .hidden { display: none; }
+    .cal-card { background:#fff; padding:16px; border-radius:10px; margin:10px auto; width:90%; max-width:720px; box-shadow: 0 4px 8px rgba(0,0,0,0.12); }
+    .row { display:flex; gap:10px; justify-content:center; align-items:center; flex-wrap:wrap; }
   </style>
   <script>
     let units = 'F';
     let augerPct = 50;
 
+    function showPage(page) {
+      const main = document.getElementById('mainPage');
+      const cal = document.getElementById('calPage');
+      if (page === 'calibration') {
+        main.classList.add('hidden');
+        cal.classList.remove('hidden');
+        window.location.hash = '#calibration';
+        // update latest log preview when entering calibration view
+        if (typeof fetchPreview === 'function') fetchPreview();
+      } else {
+        cal.classList.add('hidden');
+        main.classList.remove('hidden');
+        // clear hash if we are going home
+        if (window.location.hash === '#calibration') window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+    }
+
+    window.onhashchange = () => {
+      if (location.hash === '#calibration') showPage('calibration');
+      else showPage('main');
+    };
+
     async function refreshData() {
       try {
-        const [dataRes, statusRes] = await Promise.all([ fetch('/data'), fetch('/status') ]);
+        const dataRes = await fetch('/data');
         const data = await dataRes.json();
-        const status = await statusRes.json();
-
-        // status
-        const light = document.getElementById('light');
-        const statusText = document.getElementById('statusText');
-        if (status.recording === true) { light.style.background = 'green'; statusText.textContent = 'Recording'; }
-        else { light.style.background = 'red'; statusText.textContent = 'Idle'; }
 
         // temps
         const inTemp = units === 'F' ? data.temp_in_f : data.temp_in_c;
@@ -55,7 +90,7 @@
           augerPct = data.auger_pct;
           document.getElementById('auger_pct').textContent = augerPct.toFixed(0) + ' %';
         }
-        // sensor health
+        // sensor health (moisture)
         if (typeof data.inlet_ok === 'boolean') {
           document.getElementById('inlet_light').style.background = data.inlet_ok ? 'green' : 'red';
         }
@@ -109,70 +144,257 @@
       }
     }
 
+    async function loggingStatus() {
+      try {
+        const res = await fetch('/logs/status');
+        const j = await res.json();
+        document.getElementById('logToggleBtn').textContent = j.running ? 'Log: On' : 'Log: Off';
+        return j.running;
+      } catch (e) {
+        console.warn('Unable to fetch log status', e);
+        return false;
+      }
+    }
+
+    async function toggleLogging() {
+      try {
+        const running = await loggingStatus();
+        const url = running ? '/logs/stop' : '/logs/start';
+        const method = 'POST';
+        const res = await fetch(url, { method });
+        const j = await res.json();
+        document.getElementById('logToggleBtn').textContent = j.running ? 'Log: On' : 'Log: Off';
+      } catch (e) {
+        console.error('Error toggling logging', e);
+      }
+    }
+
+    async function viewLogs() {
+      try {
+        const res = await fetch('/logs/list');
+        const j = await res.json();
+        const logs = j.logs || [];
+        const w = window.open('', '_blank');
+        if (!w) return;
+        const html = ['<html><head><title>Logs</title></head><body><h2>Log files</h2><ul>'];
+        for (const name of logs) {
+          html.push(`<li><a href="/logs/download/${encodeURIComponent(name)}">${name}</a></li>`);
+        }
+        html.push('</ul></body></html>');
+        w.document.write(html.join('\n'));
+        w.document.close();
+      } catch (e) {
+        console.error('Error listing logs', e);
+      }
+    }
+
     function toggleUnits(){ units = units === 'F' ? 'C' : 'F'; document.getElementById('unitsBtn').textContent = units === 'F' ? '°F' : '°C'; refreshData(); }
     setInterval(refreshData, 2000);
-    window.onload = () => { document.getElementById('unitsBtn').textContent = units === 'F' ? '°F' : '°C'; fetchAuger(); refreshData(); };
+    window.onload = async () => { document.getElementById('unitsBtn').textContent = units === 'F' ? '°F' : '°C'; fetchAuger(); refreshData(); await loggingStatus(); if (location.hash === '#calibration') showPage('calibration'); };
+
+    async function fetchLatestLog() {
+      try {
+        const res = await fetch('/logs/latest');
+        const j = await res.json();
+        // kept for backward compatibility but not used in table view
+        return j.row;
+      } catch (e) {
+        console.error('Error fetching latest log', e);
+        return null;
+      }
+    }
+
+    async function logNow() {
+      try {
+        const res = await fetch('/logs/sample', { method: 'POST' });
+        const j = await res.json();
+        if (j && j.file) alert('Logged to ' + j.file);
+        else if (j && j.error) alert('Error: ' + j.error);
+        else alert('Logged');
+        // refresh preview table
+        if (typeof fetchPreview === 'function') fetchPreview();
+      } catch (e) {
+        console.error('Error logging now', e);
+        alert('Failed to log now');
+      }
+    }
+
+    async function fetchPreview(limit=10) {
+      try {
+        const res = await fetch('/logs/preview?limit=' + encodeURIComponent(limit));
+        const j = await res.json();
+        const rows = j.rows || [];
+        const head = document.getElementById('previewHead');
+        const body = document.getElementById('previewBody');
+        head.innerHTML = '';
+        body.innerHTML = '';
+        if (!rows.length) {
+          head.innerHTML = '<tr><th>No data</th></tr>';
+          return;
+        }
+
+        // Only show a compact snapshot with these friendly columns
+        const desired = ['Timestamp','Temp In','Temp Out','Moisture In','Moisture Out'];
+        // determine which of the desired keys are present in the row
+        const availableKeys = Object.keys(rows[0]);
+        const keys = desired.filter(k => availableKeys.includes(k));
+        if (!keys.length) {
+          // fallback to all keys if none of the desired are present
+          keys.push(...availableKeys);
+        }
+         const tr = document.createElement('tr');
+         for (const k of keys) {
+           const th = document.createElement('th');
+           th.textContent = k;
+           th.style.textAlign = 'left';
+           th.style.padding = '4px 6px';
+           tr.appendChild(th);
+         }
+         head.appendChild(tr);
+
+         for (const r of rows.reverse()) { // show newest first
+           const tr = document.createElement('tr');
+           for (const k of keys) {
+             const td = document.createElement('td');
+             let v = r[k];
+             if (v === null || v === undefined) v = '';
+             td.textContent = v;
+             td.style.padding = '4px 6px';
+             tr.appendChild(td);
+           }
+           body.appendChild(tr);
+         }
+       } catch (e) {
+         console.error('Error fetching preview', e);
+       }
+     }
+  </script>
+  <!-- Twemoji fallback for devices without emoji fonts (small CDN script) -->
+  <script src="https://twemoji.maxcdn.com/v/14.0.2/twemoji.min.js" crossorigin="anonymous"></script>
+  <script>
+    // Replace emoji glyphs with images for better cross-device rendering
+    document.addEventListener('DOMContentLoaded', function(){
+      try {
+        if (window.twemoji) twemoji.parse(document.body, {folder: 'svg', ext: '.svg'});
+      } catch (e) {
+        // ignore
+      }
+    });
   </script>
 </head>
 <body>
-  <h1>🌅 Dryer Dashboard</h1>
-  <div class="status">
-    Status: <span id="statusText">Loading...</span>
-    <span id="light" class="status-light"></span>
-    <button id="unitsBtn" class="units-toggle" onclick="toggleUnits()">°F</button>
-  </div>
-
-  <div class="card">
-    <span class="emoji">💧</span>
-    <div style="display:flex;align-items:center;justify-content:center;gap:10px">
-      <div class="value" id="moisture_in">-- %</div>
-      <div id="inlet_light" class="status-light" title="Inlet sensor status"></div>
+  <h1>Dryer Dashboard</h1>
+  <div id="mainPage" class="page">
+    <div class="status">
+      <button id="unitsBtn" class="units-toggle" onclick="toggleUnits()">°F</button>
+      <button id="logToggleBtn" class="units-toggle" onclick="toggleLogging()">Log: Off</button>
+      <button id="viewLogsBtn" class="units-toggle" onclick="viewLogs()">View Logs</button>
+      <button id="calBtn" class="units-toggle" onclick="showPage('calibration')">Calibration</button>
     </div>
-    <div class="label">Inlet Moisture</div>
-  </div>
 
-  <div class="card">
-    <span class="emoji">💧</span>
-    <div style="display:flex;align-items:center;justify-content:center;gap:10px">
-      <div class="value" id="moisture_out">-- %</div>
-      <div id="outlet_light" class="status-light" title="Outlet sensor status"></div>
+    <div class="card">
+      <span class="emoji">💧</span>
+      <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+        <div class="value" id="moisture_in">-- %</div>
+        <div id="inlet_light" class="status-light" title="Inlet sensor status"></div>
+      </div>
+      <div class="label">Inlet Moisture</div>
     </div>
-    <div class="label">Outlet Moisture</div>
-  </div>
 
-  <div class="card">
-    <span class="emoji">🌡️</span>
-    <div style="display:flex;align-items:center;justify-content:center;gap:10px">
-      <div class="value" id="temp_in">-- °F</div>
-      <div id="temp_in_light" class="status-light" title="Inlet temp sensor status"></div>
+    <div class="card">
+      <span class="emoji">💧</span>
+      <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+        <div class="value" id="moisture_out">-- %</div>
+        <div id="outlet_light" class="status-light" title="Outlet sensor status"></div>
+      </div>
+      <div class="label">Outlet Moisture</div>
     </div>
-    <div class="label">Inlet Temp</div>
-  </div>
 
-  <div class="card">
-   <span class="emoji">🌡️</span>
-    <div style="display:flex;align-items:center;justify-content:center;gap:10px">
-      <div class="value" id="temp_out">-- °F</div>
-      <div id="temp_out_light" class="status-light" title="Outlet temp sensor status"></div>
+    <div class="card">
+      <span class="emoji">🌡️</span>
+      <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+        <div class="value" id="temp_in">-- °F</div>
+        <div class="status-light" id="temp_in_light" title="Inlet temp sensor status"></div>
+      </div>
+      <div class="label">Inlet Temp</div>
     </div>
-    <div class="label">Outlet Temp</div>
+
+    <div class="card">
+     <span class="emoji">🌡️</span>
+      <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+        <div class="value" id="temp_out">-- °F</div>
+        <div class="status-light" id="temp_out_light" title="Outlet temp sensor status"></div>
+      </div>
+      <div class="label">Outlet Temp</div>
+    </div>
+
+    <div class="card">
+      <span class="emoji">📊</span>
+      <div class="value" id="bushels">--</div>
+      <div class="label">Bushels / hr</div>
+    </div>
+
+    <div class="card no-emoji">
+      <div class="value" id="auger_pct">-- %</div>
+      <div class="label">Discharge Auger</div>
+      <div style="margin-top:10px">
+        <button class="small-button" onclick="changeAuger(1)">▲</button>
+        <button class="small-button" onclick="changeAuger(-1)">▼</button>
+      </div>
+    </div>
+
   </div>
 
-  <div class="card">
-    <span class="emoji">📊</span>
-    <div class="value" id="bushels">--</div>
-    <div class="label">Bushels / hr</div>
-  </div>
+  <!-- Calibration page: hidden by default, shown in-place -->
+  <div id="calPage" class="page hidden">
+    <div class="cal-card">
+      <h2>Calibration</h2>
+      <p>Use this page to take hand-samples, view recent logged samples, and add calibration entries.</p>
 
-  <div class="card">
-    <span class="emoji">⚙️</span>
-    <div class="value" id="auger_pct">-- %</div>
-    <div class="label">Discharge Auger</div>
-    <div style="margin-top:10px">
-  <button class="small-button" onclick="changeAuger(1)">▲</button>
-  <button class="small-button" onclick="changeAuger(-1)">▼</button>
+      <div class="row" style="margin-top:8px;">
+        <button class="small-button" onclick="fetch('/logs/list').then(r=>r.json()).then(j=>alert('Existing logs: ' + (j.logs||[]).join(', '))).catch(e=>alert('Error'))">List Logs</button>
+        <button class="small-button" onclick="fetch('/logs/status').then(r=>r.json()).then(j=>alert('Logging: ' + (j.running? 'On':'Off') + (j.file? '\nFile: '+j.file:''))).catch(()=>alert('Error'))">Log Status</button>
+        <button class="small-button" onclick="fetch('/logs/start',{method:'POST'}).then(()=>alert('Started logging (if possible)')).catch(()=>alert('Error'))">Start Logging</button>
+        <button class="small-button" onclick="fetch('/logs/stop',{method:'POST'}).then(()=>alert('Stopped logging')).catch(()=>alert('Error'))">Stop Logging</button>
+      </div>
+
+      <div class="row" style="margin-top:8px; width:100%;">
+        <button class="small-button" id="logNowBtn" onclick="logNow()">Log Now</button>
+        <div style="flex:1; min-width:320px; text-align:left;">
+          <div style="background:#f6f6f6;padding:8px;border-radius:6px;">
+            <strong>Recent Samples</strong>
+            <table id="previewTable" style="width:100%;border-collapse:collapse;margin-top:6px;font-size:0.9em;">
+              <thead id="previewHead"></thead>
+              <tbody id="previewBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;">
+        <button class="small-button" onclick="showPage('main')">Back to Dashboard</button>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <button class="small-button" onclick="window.open('/logs/export','_blank')">Export XLSX</button>
+      </div>
     </div>
   </div>
+
+  <!-- Exit button (lower-right) -->
+  <button id="exitBtn" style="position:fixed;right:12px;bottom:12px;padding:10px 14px;border-radius:8px;background:#e74c3c;color:#fff;border:none;cursor:pointer;box-shadow:0 4px 8px rgba(0,0,0,0.2);" onclick="exitKiosk()">Exit</button>
+
+  <script>
+    async function exitKiosk(){
+      try {
+        const res = await fetch('/kiosk/exit', { method: 'POST' });
+        const j = await res.json();
+        if (j && j.stopped) alert('Kiosk stop requested');
+        else alert('Exit failed: ' + (j.error||'unknown'));
+      } catch (e) {
+        alert('Exit request failed: ' + e);
+      }
+    }
+  </script>
 
 </body>
 </html>
