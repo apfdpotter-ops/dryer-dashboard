@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Dryer Kiosk
+Comment=Start the Dryer Dashboard kiosk (Chromium + backend)
+Exec=/home/pi/dryer-dashboard/dryer-dashboard/tools/start-kiosk.sh
+Icon=utilities-terminal
+Terminal=false
+Categories=Utility;Application;
+StartupNotify=true

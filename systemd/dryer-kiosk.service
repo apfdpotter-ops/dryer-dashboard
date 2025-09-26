@@ -1,0 +1,20 @@
+[Unit]
+Description=Dryer Dashboard Kiosk
+After=graphical.target network.target
+
+[Service]
+Type=simple
+User=steve
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/steve/.Xauthority
+ExecStart=/home/steve/dryer-dashboard/dryer-dashboard/tools/start-kiosk.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical.target
+
+# Usage:
+# Copy this file to /etc/systemd/system/dryer-kiosk.service and run:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now dryer-kiosk.service

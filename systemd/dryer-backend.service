@@ -1,0 +1,20 @@
+[Unit]
+Description=Dryer Dashboard backend (gunicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=steve
+WorkingDirectory=/home/steve/dryer-dashboard/dryer-dashboard
+Environment=PATH=/home/steve/dryer-dashboard/dryer-dashboard/.venv/bin:/usr/bin:/bin
+User=steve
+WorkingDirectory=/home/steve/dryer-dashboard/dryer-dashboard
+ExecStart=/home/steve/dryer-dashboard/dryer-dashboard/.venv/bin/gunicorn --workers 1 --preload --bind 0.0.0.0:8000 'app:create_app()'
+
+[Install]
+WantedBy=multi-user.target
+
+# Usage: copy to /etc/systemd/system/ and enable
+# sudo cp dryer-dashboard/dryer-dashboard/systemd/dryer-backend.service /etc/systemd/system/
+# sudo systemctl daemon-reload
+# sudo systemctl enable --now dryer-backend.service

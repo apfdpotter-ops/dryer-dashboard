@@ -1,67 +1,178 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Dryer Dashboard (kiosk)</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Dryer Dashboard</title>
   <style>
-    body { font-family: system-ui, -apple-system, Roboto, "Segoe UI", Arial; margin: 0; padding: 1rem; background:#0f172a; color:#e6eef8 }
-    main { max-width: 900px; margin: 0 auto }
-    .card { background:#111827; padding:1rem; border-radius:8px; box-shadow: 0 6px 18px rgba(2,6,23,0.6); margin-bottom:1rem }
-    .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:1rem }
-    h1 { margin-top:0 }
-    .value { font-size:1.8rem; font-weight:700 }
-    .muted { color:#9aa6bf }
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      background: #63666A;
+      color: #333;
+      margin: 0;
+      padding: 20px;
+    }
+    h1 { margin-bottom: 10px; font-size: 2.2em; }
+    .status-light { width: 20px; height: 20px; border-radius: 50%; display: inline-block; margin-left: 10px; vertical-align: middle; border: 2px solid #666; }
+    .status { font-size: 1.3em; margin-bottom: 20px; }
+    .card { display: inline-block; background: #fff; border-radius: 12px; padding: 20px; margin: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.15); min-width: 200px; }
+    .emoji { font-size: 2em; display: block; margin-bottom: 5px; }
+    .value { font-size: 1.6em; font-weight: bold; }
+    .label { font-size: 1em; color: #777; }
+    .units-toggle { margin-left: 12px; padding:6px 10px; border-radius:6px; cursor:pointer }
+    .small-button { background: #eee; border-radius: 6px; border: 1px solid #ccc; padding: 6px 10px; cursor: pointer; margin: 2px; font-weight: bold; }
   </style>
+  <script>
+    let units = 'F';
+    let augerPct = 50;
+
+    async function refreshData() {
+      try {
+        const [dataRes, statusRes] = await Promise.all([ fetch('/data'), fetch('/status') ]);
+        const data = await dataRes.json();
+        const status = await statusRes.json();
+
+        // status
+        const light = document.getElementById('light');
+        const statusText = document.getElementById('statusText');
+        if (status.recording === true) { light.style.background = 'green'; statusText.textContent = 'Recording'; }
+        else { light.style.background = 'red'; statusText.textContent = 'Idle'; }
+
+        // temps
+        const inTemp = units === 'F' ? data.temp_in_f : data.temp_in_c;
+        const outTemp = units === 'F' ? data.temp_out_f : data.temp_out_c;
+        document.getElementById('temp_in').textContent = inTemp == null ? '--' : inTemp.toFixed(1) + (units === 'F' ? ' °F' : ' °C');
+        document.getElementById('temp_out').textContent = outTemp == null ? '--' : outTemp.toFixed(1) + (units === 'F' ? ' °F' : ' °C');
+
+        // moisture & bushels
+        document.getElementById('moisture_in').textContent = data.moisture_in == null ? '--' : data.moisture_in.toFixed(1) + ' %';
+        document.getElementById('moisture_out').textContent = data.moisture_out == null ? '--' : data.moisture_out.toFixed(1) + ' %';
+        document.getElementById('bushels').textContent = data.bushels_per_hr == null ? '--' : data.bushels_per_hr.toFixed(1);
+
+        // auger
+        if (typeof data.auger_pct === 'number') {
+          augerPct = data.auger_pct;
+          document.getElementById('auger_pct').textContent = augerPct.toFixed(0) + ' %';
+        }
+        // sensor health
+        if (typeof data.inlet_ok === 'boolean') {
+          document.getElementById('inlet_light').style.background = data.inlet_ok ? 'green' : 'red';
+        }
+        if (typeof data.outlet_ok === 'boolean') {
+          document.getElementById('outlet_light').style.background = data.outlet_ok ? 'green' : 'red';
+        }
+        // mirror the same health lights for temperature cards
+        if (typeof data.inlet_ok === 'boolean') {
+          document.getElementById('temp_in_light').style.background = data.inlet_ok ? 'green' : 'red';
+        }
+        if (typeof data.outlet_ok === 'boolean') {
+          document.getElementById('temp_out_light').style.background = data.outlet_ok ? 'green' : 'red';
+        }
+        if (data.simulated) {
+          // indicate simulated mode with amber lights
+          document.getElementById('inlet_light').style.background = 'orange';
+          document.getElementById('outlet_light').style.background = 'orange';
+          document.getElementById('temp_in_light').style.background = 'orange';
+          document.getElementById('temp_out_light').style.background = 'orange';
+        }
+      } catch (err) {
+        console.error('Error fetching data:', err);
+      }
+    }
+
+    async function fetchAuger() {
+      try {
+        const res = await fetch('/auger');
+        const j = await res.json();
+        if (typeof j.auger_pct === 'number') {
+          augerPct = j.auger_pct;
+          document.getElementById('auger_pct').textContent = augerPct.toFixed(0) + ' %';
+        }
+      } catch (e) {
+        console.warn('Unable to fetch auger pct', e);
+      }
+    }
+
+    async function changeAuger(delta) {
+      try {
+        const res = await fetch('/auger', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ delta: delta })
+        });
+        const j = await res.json();
+        if (typeof j.auger_pct === 'number') {
+          augerPct = j.auger_pct;
+          document.getElementById('auger_pct').textContent = augerPct.toFixed(0) + ' %';
+        }
+      } catch (e) {
+        console.error('Error changing auger pct', e);
+      }
+    }
+
+    function toggleUnits(){ units = units === 'F' ? 'C' : 'F'; document.getElementById('unitsBtn').textContent = units === 'F' ? '°F' : '°C'; refreshData(); }
+    setInterval(refreshData, 2000);
+    window.onload = () => { document.getElementById('unitsBtn').textContent = units === 'F' ? '°F' : '°C'; fetchAuger(); refreshData(); };
+  </script>
 </head>
 <body>
-<main>
-  <h1>Dryer Dashboard</h1>
-  <p class="muted">Kiosk UI placeholder — this will be replaced with a full dashboard later.</p>
-
-  <div class="grid">
-    <div class="card" id="card-temp">
-      <div class="muted">Temperature</div>
-      <div class="value" id="temp">—</div>
-    </div>
-    <div class="card" id="card-hum">
-      <div class="muted">Humidity</div>
-      <div class="value" id="hum">—</div>
-    </div>
-    <div class="card" id="card-vib">
-      <div class="muted">Vibration</div>
-      <div class="value" id="vib">—</div>
-    </div>
-    <div class="card" id="card-door">
-      <div class="muted">Door</div>
-      <div class="value" id="door">—</div>
-    </div>
+  <h1>🌅 Dryer Dashboard</h1>
+  <div class="status">
+    Status: <span id="statusText">Loading...</span>
+    <span id="light" class="status-light"></span>
+    <button id="unitsBtn" class="units-toggle" onclick="toggleUnits()">°F</button>
   </div>
 
   <div class="card">
-    <div class="muted">Raw JSON</div>
-    <pre id="json" style="white-space:pre-wrap; word-break:break-word; margin:0;">—</pre>
+    <span class="emoji">💧</span>
+    <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+      <div class="value" id="moisture_in">-- %</div>
+      <div id="inlet_light" class="status-light" title="Inlet sensor status"></div>
+    </div>
+    <div class="label">Inlet Moisture</div>
   </div>
-</main>
 
-<script>
-async function refresh() {
-  try {
-    const res = await fetch('/api/sensors');
-    if (!res.ok) throw new Error('Network error');
-    const data = await res.json();
-    document.getElementById('temp').textContent = data.temperature_c + ' °C';
-    document.getElementById('hum').textContent = data.humidity_pct + ' %';
-    document.getElementById('vib').textContent = data.vibration_g + ' g';
-    document.getElementById('door').textContent = data.door_open ? 'Open' : 'Closed';
-    document.getElementById('json').textContent = JSON.stringify(data, null, 2);
-  } catch (err) {
-    document.getElementById('json').textContent = 'Error: ' + err.message;
-  }
-}
+  <div class="card">
+    <span class="emoji">💧</span>
+    <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+      <div class="value" id="moisture_out">-- %</div>
+      <div id="outlet_light" class="status-light" title="Outlet sensor status"></div>
+    </div>
+    <div class="label">Outlet Moisture</div>
+  </div>
 
-refresh();
-setInterval(refresh, 2000);
-</script>
+  <div class="card">
+    <span class="emoji">🌡️</span>
+    <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+      <div class="value" id="temp_in">-- °F</div>
+      <div id="temp_in_light" class="status-light" title="Inlet temp sensor status"></div>
+    </div>
+    <div class="label">Inlet Temp</div>
+  </div>
+
+  <div class="card">
+   <span class="emoji">🌡️</span>
+    <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+      <div class="value" id="temp_out">-- °F</div>
+      <div id="temp_out_light" class="status-light" title="Outlet temp sensor status"></div>
+    </div>
+    <div class="label">Outlet Temp</div>
+  </div>
+
+  <div class="card">
+    <span class="emoji">📊</span>
+    <div class="value" id="bushels">--</div>
+    <div class="label">Bushels / hr</div>
+  </div>
+
+  <div class="card">
+    <span class="emoji">⚙️</span>
+    <div class="value" id="auger_pct">-- %</div>
+    <div class="label">Discharge Auger</div>
+    <div style="margin-top:10px">
+  <button class="small-button" onclick="changeAuger(1)">▲</button>
+  <button class="small-button" onclick="changeAuger(-1)">▼</button>
+    </div>
+  </div>
+
 </body>
 </html>
