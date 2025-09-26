@@ -30,8 +30,18 @@
     object-fit: contain;
     margin-bottom: 6px;
   }
-  /* Cards that don't have an emoji need slightly tighter vertical spacing */
-  .card.no-emoji { padding-top: 18px; }
+  /* No visual padding here — we keep spacing consistent by using a hidden emoji placeholder */
+  /* helper to keep card spacing when we remove the visible emoji: keep an invisible inline block
+     the same size as the emoji so layout remains consistent */
+  .card .emoji-placeholder {
+    width: 1.8em;
+    height: 1.8em;
+    display: block;
+    visibility: hidden;
+    margin-bottom: 6px;
+  }
+  /* center a small button row inside cards (used by the auger card) */
+  .card .btn-row { display:flex; gap:8px; justify-content:center; align-items:center; }
     .value { font-size: 1.6em; font-weight: bold; }
     .label { font-size: 1em; color: #777; }
     .units-toggle { margin-left: 12px; padding:6px 10px; border-radius:6px; cursor:pointer }
@@ -335,12 +345,13 @@
     </div>
 
     <div class="card no-emoji">
-      <div class="value" id="auger_pct">-- %</div>
-      <div class="label">Discharge Auger</div>
-      <div style="margin-top:10px">
+      <span class="emoji-placeholder"></span>
+      <div class="btn-row" style="margin-bottom:8px;">
         <button class="small-button" onclick="changeAuger(1)">▲</button>
         <button class="small-button" onclick="changeAuger(-1)">▼</button>
       </div>
+      <div class="value" id="auger_pct">-- %</div>
+      <div class="label">Discharge Auger</div>
     </div>
 
   </div>
