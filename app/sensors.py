@@ -148,17 +148,49 @@ def get_temps(return_fahrenheit: bool = False) -> Tuple[Optional[float], Optiona
         inlet_c = round(random.uniform(20.0, 60.0), 2)
         outlet_c = round(random.uniform(20.0, 60.0), 2)
     else:
-        try:
-            inlet_c = thermo_inlet.temperature
-        except Exception as e:
-            inlet_c = None
-            print(f"Error reading inlet thermocouple: {e}")
+        inlet_c = None
+        outlet_c = None
+        
+        # Read inlet temperature with retry logic
+        for attempt in range(3):
+            try:
+                # Add small delay before each read to stabilize SPI
+                if attempt > 0:
+                    time.sleep(0.1)
+                    
+                temp = thermo_inlet.temperature
+                if temp is not None and -200 < temp < 1000:  # Sanity check
+                    inlet_c = round(temp, 2)
+                    break
+                else:
+                    print(f"Inlet thermocouple returned invalid temp: {temp}")
+                    
+            except Exception as e:
+                print(f"Error reading inlet thermocouple (attempt {attempt + 1}/3): {e}")
+                if attempt == 2:  # Last attempt
+                    print("Failed to read inlet temperature after 3 attempts")
 
-        try:
-            outlet_c = thermo_outlet.temperature
-        except Exception as e:
-            outlet_c = None
-            print(f"Error reading outlet thermocouple: {e}")
+        # Delay between sensors to avoid SPI bus contention
+        time.sleep(0.05)
+        
+        # Read outlet temperature with retry logic
+        for attempt in range(3):
+            try:
+                # Add small delay before each read to stabilize SPI
+                if attempt > 0:
+                    time.sleep(0.1)
+                    
+                temp = thermo_outlet.temperature
+                if temp is not None and -200 < temp < 1000:  # Sanity check
+                    outlet_c = round(temp, 2)
+                    break
+                else:
+                    print(f"Outlet thermocouple returned invalid temp: {temp}")
+                    
+            except Exception as e:
+                print(f"Error reading outlet thermocouple (attempt {attempt + 1}/3): {e}")
+                if attempt == 2:  # Last attempt
+                    print("Failed to read outlet temperature after 3 attempts")
 
     if return_fahrenheit:
         return c_to_f(inlet_c), c_to_f(outlet_c)
@@ -178,17 +210,47 @@ def get_moisture() -> Tuple[Optional[float], Optional[float]]:
         outlet_v = round(random.uniform(0.0, 3.3), 3)
         return inlet_v, outlet_v
 
-    try:
-        inlet_v = chan_inlet.voltage
-    except Exception as e:
-        inlet_v = None
-        print(f"Error reading inlet moisture sensor: {e}")
+    inlet_v = None
+    outlet_v = None
 
-    try:
-        outlet_v = chan_outlet.voltage
-    except Exception as e:
-        outlet_v = None
-        print(f"Error reading outlet moisture sensor: {e}")
+    # Read inlet moisture with retry logic
+    for attempt in range(3):
+        try:
+            if attempt > 0:
+                time.sleep(0.05)
+                
+            voltage = chan_inlet.voltage
+            if voltage is not None and 0 <= voltage <= 5.0:  # Sanity check
+                inlet_v = round(voltage, 3)
+                break
+            else:
+                print(f"Inlet moisture sensor returned invalid voltage: {voltage}")
+                
+        except Exception as e:
+            print(f"Error reading inlet moisture sensor (attempt {attempt + 1}/3): {e}")
+            if attempt == 2:
+                print("Failed to read inlet moisture after 3 attempts")
+
+    # Small delay between I2C reads
+    time.sleep(0.02)
+
+    # Read outlet moisture with retry logic  
+    for attempt in range(3):
+        try:
+            if attempt > 0:
+                time.sleep(0.05)
+                
+            voltage = chan_outlet.voltage
+            if voltage is not None and 0 <= voltage <= 5.0:  # Sanity check
+                outlet_v = round(voltage, 3)
+                break
+            else:
+                print(f"Outlet moisture sensor returned invalid voltage: {voltage}")
+                
+        except Exception as e:
+            print(f"Error reading outlet moisture sensor (attempt {attempt + 1}/3): {e}")
+            if attempt == 2:
+                print("Failed to read outlet moisture after 3 attempts")
 
     return inlet_v, outlet_v
 
